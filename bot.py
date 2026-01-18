@@ -500,8 +500,7 @@ async def process_dialog_message(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         logger.error(f"OpenAI API error: {e}")
         await update.message.reply_text(
-            "Вибач, сталася помилка. (Извини, произошла ошибка.)\n"
-            "Спробуй ще раз! (Попробуй ещё раз!)"
+            "Извини, произошла ошибка. Попробуй ещё раз!"
         )
     
     return DIALOG
@@ -557,7 +556,7 @@ async def process_translation_answer(update: Update, context: ContextTypes.DEFAU
         user_info["streak"] += 1
         
         response = f"""
-✅ *Правильно!* Молодець! (Молодец!)
+✅ *Правильно!* Молодец!
 
 🔥 Серия правильных ответов: {user_info["streak"]}
 
@@ -648,9 +647,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_info["mode"] = CHOOSING
     
     welcome_text = f"""
-🇺🇦 *Привіт, {user.first_name}!*
+🇺🇦 *Привет, {user.first_name}!*
 
-Ласкаво просимо! (Добро пожаловать!)
+Добро пожаловать!
 
 Я помогу тебе выучить украинский язык через метод *Discovery* — учимся на примерах, а не на правилах!
 
@@ -834,7 +833,7 @@ async def handle_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if user_message.lower() == '/stop':
         user_info["mode"] = CHOOSING
         await update.message.reply_text(
-            "Діалог завершено! (Диалог завершён!)\n\nИспользуй /start для главного меню."
+            "Диалог завершён!\n\nИспользуй /start для главного меню."
         )
         return CHOOSING
     
