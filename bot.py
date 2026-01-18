@@ -1022,6 +1022,13 @@ def main() -> None:
     """Запуск бота"""
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
+    # Обработчик ошибок для Conflict ошибок
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.error(f"Update {update} caused error {context.error}")
+        if "Conflict" in str(context.error):
+            logger.warning("Conflict error detected, restarting...")
+            return
+    
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -1059,6 +1066,7 @@ def main() -> None:
     
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("progress", show_progress))
+    application.add_error_handler(error_handler)
     
     logger.info("Бот запущен!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
