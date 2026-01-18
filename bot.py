@@ -2,7 +2,7 @@
 """
 Telegram бот для изучения украинского языка через методологию Discovery
 Для носителей русского языка - фокус на разговорной бытовой речи
-С поддержкой голосовых сообщений и AI-помощником
+С поддержкой голосовых сообщений, AI-помощником и натуральным украинским голосом ElevenLabs
 """
 
 from dotenv import load_dotenv
@@ -22,6 +22,7 @@ from telegram.ext import (
     ContextTypes, filters, ConversationHandler
 )
 from openai import OpenAI
+from elevenlabs.client import ElevenLabs
 
 # Настройка логирования
 logging.basicConfig(
@@ -33,15 +34,25 @@ logger = logging.getLogger(__name__)
 # Конфигурация
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_OPENAI_KEY")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "YOUR_ELEVENLABS_KEY")
 
-# Инициализация OpenAI клиента
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Инициализация клиентов
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
+elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+
+# ElevenLabs голоса для украинского
+UKRAINIAN_VOICES = {
+    "nicoletta": "lBpHyluYpWLnqqh742Jh",  # Nicoletta - рекомендуемый голос
+    "vira": "T0D5z8h7c1XgyjzzYXzW",       # Vira - молодой натуральный
+    "anton": "EXAVITQu4vr4xnSDxMaL",      # Anton - дружелюбный
+}
+
+DEFAULT_VOICE = "nicoletta"  # По умолчанию Nicoletta
 
 # Состояния для ConversationHandler
 CHOOSING, LESSON, DIALOG, TRANSLATE, QUESTION = range(5)
 
 # ============== БАЗА КОНТЕНТА: МЕТОДОЛОГИЯ DISCOVERY ==============
-# Фразы организованы по темам с контекстом и объяснениями
 
 DISCOVERY_LESSONS = {
     "greetings": {
@@ -98,36 +109,36 @@ DISCOVERY_LESSONS = {
                 "ukrainian": "Можна меню, будь ласка?",
                 "russian": "Можно меню, пожалуйста?",
                 "context": "Просим меню в кафе или ресторане",
-                "discovery": "'Будь ласка' = пожалуйста. Буквально 'будь ласков'. Очень вежливая форма!",
-                "audio_hint": "МОЖ-на ме-НЮ, будь ЛАС-ка"
+                "discovery": "'Можна' = можно, 'будь ласка' = пожалуйста (буквально 'будь ласков')",
+                "audio_hint": "МОЖ-на, будь ЛА-ска"
             },
             {
                 "ukrainian": "Я хочу каву",
                 "russian": "Я хочу кофе",
                 "context": "Заказываем кофе",
-                "discovery": "'Кава' = кофе. В украинском женский род! 'Смачна кава' - вкусный кофе",
+                "discovery": "'Кава' = кофе (женский род в украинском!). Не 'кофе', а 'кава'",
                 "audio_hint": "я ХО-чу КА-ву"
             },
             {
-                "ukrainian": "Скільки коштує?",
-                "russian": "Сколько стоит?",
+                "ukrainian": "Скільки це коштує?",
+                "russian": "Сколько это стоит?",
                 "context": "Спрашиваем цену",
-                "discovery": "'Скільки' = сколько, 'коштує' = стоит. Коштує от слова 'кошт' - стоимость",
-                "audio_hint": "СКІЛЬ-ки кош-ТУ-є?"
-            },
-            {
-                "ukrainian": "Рахунок, будь ласка",
-                "russian": "Счёт, пожалуйста",
-                "context": "Просим счёт",
-                "discovery": "'Рахунок' = счёт. Похоже на 'рахувати' - считать",
-                "audio_hint": "ра-ХУ-нок, будь ЛАС-ка"
+                "discovery": "'Скільки' = сколько, 'коштує' = стоит (от слова 'кошт' - цена)",
+                "audio_hint": "СКІЛЬ-ки це КОШ-ту-є?"
             },
             {
                 "ukrainian": "Дуже смачно!",
                 "russian": "Очень вкусно!",
                 "context": "Хвалим еду",
-                "discovery": "'Дуже' = очень, 'смачно' = вкусно. Смачного! - приятного аппетита!",
-                "audio_hint": "ДУ-же СМАЧ-но"
+                "discovery": "'Дуже' = очень, 'смачно' = вкусно. Похоже на русское 'смачный'",
+                "audio_hint": "ДУ-же СМА-чно!"
+            },
+            {
+                "ukrainian": "Рахунок, будь ласка!",
+                "russian": "Счет, пожалуйста!",
+                "context": "Просим счет",
+                "discovery": "'Рахунок' = счет (от слова 'рахувати' - считать)",
+                "audio_hint": "ра-ХУ-нок, будь ЛА-ска"
             },
         ]
     },
@@ -137,70 +148,49 @@ DISCOVERY_LESSONS = {
             {
                 "ukrainian": "Де зупинка?",
                 "russian": "Где остановка?",
-                "context": "Спрашиваем где остановка транспорта",
-                "discovery": "'Де' = где, 'зупинка' = остановка (от 'зупинитися' - остановиться)",
-                "audio_hint": "де зу-ПИН-ка?"
+                "context": "Ищем остановку",
+                "discovery": "'Де' = где, 'зупинка' = остановка (от слова 'зупинити' - остановить)",
+                "audio_hint": "де зу-ПІН-ка?"
             },
             {
-                "ukrainian": "Який автобус їде до центру?",
-                "russian": "Какой автобус едет до центра?",
-                "context": "Узнаём маршрут",
-                "discovery": "'Який' = какой, 'їде' = едет. Буква 'ї' читается как 'йи'",
-                "audio_hint": "я-КИЙ ав-ТО-бус ЇДЕ до ЦЕН-тру?"
+                "ukrainian": "Один квиток до центру",
+                "russian": "Один билет до центра",
+                "context": "Покупаем билет",
+                "discovery": "'Квиток' = билет, 'центр' → 'центру' (дательный падеж)",
+                "audio_hint": "о-ДИН КВІ-ток до ЦЕН-тру"
             },
             {
-                "ukrainian": "Мені потрібно вийти тут",
-                "russian": "Мне нужно выйти здесь",
-                "context": "Просим остановить",
-                "discovery": "'Потрібно' = нужно, 'вийти' = выйти, 'тут' = здесь/тут",
-                "audio_hint": "ме-НІ по-ТРІБ-но ВИЙ-ти тут"
-            },
-            {
-                "ukrainian": "Скільки коштує квиток?",
-                "russian": "Сколько стоит билет?",
-                "context": "Спрашиваем цену билета",
-                "discovery": "'Квиток' = билет. Запомни это слово - часто используется!",
-                "audio_hint": "СКІЛЬ-ки кош-ТУ-є кви-ТОК?"
+                "ukrainian": "Це автобус номер 5?",
+                "russian": "Это автобус номер 5?",
+                "context": "Проверяем номер автобуса",
+                "discovery": "'Це' = это, 'номер' = номер (похоже на русское)",
+                "audio_hint": "це ав-то-БУС НО-мер п'ять?"
             },
         ]
     },
     "shopping": {
-        "title": "🛒 Покупки",
+        "title": "🛍️ Покупки",
         "phrases": [
             {
-                "ukrainian": "Скільки це коштує?",
-                "russian": "Сколько это стоит?",
+                "ukrainian": "Скільки коштує?",
+                "russian": "Сколько стоит?",
                 "context": "Спрашиваем цену товара",
-                "discovery": "'Це' = это. Простое и частое слово!",
-                "audio_hint": "СКІЛЬ-ки це кош-ТУ-є?"
+                "discovery": "'Коштує' = стоит (основной глагол для цены)",
+                "audio_hint": "СКІЛЬ-ки КОШ-ту-є?"
             },
             {
-                "ukrainian": "Чи можна подивитися?",
-                "russian": "Можно посмотреть?",
-                "context": "Просим показать товар",
-                "discovery": "'Чи' - вопросительная частица (необязательна). 'Подивитися' = посмотреть",
-                "audio_hint": "чи МОЖ-на по-ди-ВИ-ти-ся?"
+                "ukrainian": "Це занадто дорого",
+                "russian": "Это слишком дорого",
+                "context": "Товар дорогой",
+                "discovery": "'Занадто' = слишком, 'дорого' = дорого",
+                "audio_hint": "це за-НА-дто ДО-ро-го"
             },
             {
-                "ukrainian": "Я візьму це",
-                "russian": "Я возьму это",
-                "context": "Решаем купить",
-                "discovery": "'Візьму' = возьму. Обрати внимание на 'і' вместо 'о'",
-                "audio_hint": "я ВІЗЬ-му це"
-            },
-            {
-                "ukrainian": "Де можна заплатити?",
-                "russian": "Где можно заплатить?",
-                "context": "Ищем кассу",
-                "discovery": "'Заплатити' = заплатить. Почти как в русском!",
-                "audio_hint": "де МОЖ-на за-пла-ТИ-ти?"
-            },
-            {
-                "ukrainian": "Дякую, до побачення!",
-                "russian": "Спасибо, до свидания!",
-                "context": "Прощаемся",
-                "discovery": "'До побачення' = до свидания. 'Побачення' от 'бачити' - видеть",
-                "audio_hint": "ДЯ-ку-ю, до по-БА-чен-ня"
+                "ukrainian": "Є знижка?",
+                "russian": "Есть скидка?",
+                "context": "Спрашиваем про скидку",
+                "discovery": "'Є' = есть (от слова 'бути' - быть), 'знижка' = скидка",
+                "audio_hint": "є ЗНІ-жка?"
             },
         ]
     },
@@ -210,50 +200,29 @@ DISCOVERY_LESSONS = {
             {
                 "ukrainian": "Я вдома",
                 "russian": "Я дома",
-                "context": "Сообщаем что мы дома",
-                "discovery": "'Вдома' = дома. Приставка 'в' добавляется",
+                "context": "Говорим что мы дома",
+                "discovery": "'Вдома' = дома (с приставкой 'в'). Не 'дома', а 'вдома'",
                 "audio_hint": "я ВДО-ма"
-            },
-            {
-                "ukrainian": "Я голодний/голодна",
-                "russian": "Я голодный/голодная",
-                "context": "Говорим что хотим есть",
-                "discovery": "'Голодний' (м.р.) / 'голодна' (ж.р.) - почти как в русском!",
-                "audio_hint": "я го-ЛОД-ний / го-ЛОД-на"
             },
             {
                 "ukrainian": "Що будемо їсти?",
                 "russian": "Что будем есть?",
-                "context": "Обсуждаем еду",
-                "discovery": "'Що' = что, 'їсти' = есть (кушать). 'Ї' читается как 'йи'",
+                "context": "Спрашиваем что готовить",
+                "discovery": "'Що' = что, 'їсти' = есть (с диакритикой 'ї')",
                 "audio_hint": "що БУ-де-мо ЇС-ти?"
-            },
-            {
-                "ukrainian": "Я хочу спати",
-                "russian": "Я хочу спать",
-                "context": "Говорим что устали",
-                "discovery": "'Спати' = спать. Инфинитив на '-ти' вместо русского '-ть'",
-                "audio_hint": "я ХО-чу СПА-ти"
             },
             {
                 "ukrainian": "На добраніч!",
                 "russian": "Спокойной ночи!",
-                "context": "Желаем спокойной ночи",
-                "discovery": "'Добраніч' = доброй ночи. Слитное написание!",
-                "audio_hint": "на доб-ра-НІЧ!"
+                "context": "Пожелание перед сном",
+                "discovery": "'На добраніч' = спокойной ночи (буквально 'на добрую ночь', слитно)",
+                "audio_hint": "на ДОБ-ра-НІЧ!"
             },
         ]
     },
     "emotions": {
-        "title": "😊 Эмоции и чувства",
+        "title": "😊 Эмоции",
         "phrases": [
-            {
-                "ukrainian": "Я радий/рада тебе бачити!",
-                "russian": "Я рад/рада тебя видеть!",
-                "context": "Выражаем радость от встречи",
-                "discovery": "'Радий' (м.р.) / 'рада' (ж.р.), 'бачити' = видеть",
-                "audio_hint": "я РА-дий/РА-да те-БЕ БА-чи-ти"
-            },
             {
                 "ukrainian": "Мені сумно",
                 "russian": "Мне грустно",
@@ -346,24 +315,31 @@ def get_user_data(user_id: int) -> dict:
             "streak": 0,
             "last_activity": None,
             "dialog_context": [],
-            "mode": None  # Текущий режим работы
+            "mode": None,
+            "voice": DEFAULT_VOICE
         }
     return user_data[user_id]
 
 
-# ============== ГОЛОСОВЫЕ ФУНКЦИИ ==============
+# ============== ГОЛОСОВЫЕ ФУНКЦИИ С ELEVENLABS ==============
 
-async def generate_speech(text: str, voice: str = "alloy") -> bytes:
-    """Генерация голосового сообщения через OpenAI TTS"""
+async def generate_speech_elevenlabs(text: str, voice_id: str = None) -> bytes:
+    """Генерация голосового сообщения через ElevenLabs"""
     try:
-        response = client.audio.speech.create(
-            model="tts-1",
-            voice=voice,  # alloy, echo, fable, onyx, nova, shimmer
-            input=text
+        if voice_id is None:
+            voice_id = UKRAINIAN_VOICES[DEFAULT_VOICE]
+        
+        audio = elevenlabs_client.generate(
+            text=text,
+            voice=voice_id,
+            model="eleven_multilingual_v2"
         )
-        return response.content
+        
+        # Преобразуем в bytes
+        audio_bytes = b"".join(audio)
+        return audio_bytes
     except Exception as e:
-        logger.error(f"TTS error: {e}")
+        logger.error(f"ElevenLabs TTS error: {e}")
         return None
 
 
@@ -371,10 +347,10 @@ async def transcribe_voice(file_path: str) -> str:
     """Транскрипция голосового сообщения через OpenAI Whisper"""
     try:
         with open(file_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
+            transcript = openai_client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_file,
-                language="uk"  # Украинский язык
+                language="uk"
             )
         return transcript.text
     except Exception as e:
@@ -382,16 +358,22 @@ async def transcribe_voice(file_path: str) -> str:
         return None
 
 
-async def send_voice_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+async def send_voice_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, voice_id: str = None) -> None:
     """Отправить голосовое сообщение с украинской фразой"""
-    audio_data = await generate_speech(text)
+    audio_data = await generate_speech_elevenlabs(text, voice_id)
     if audio_data:
-        await update.callback_query.message.reply_voice(
-            voice=io.BytesIO(audio_data),
-            caption=f"🔊 {text}"
-        )
+        try:
+            await update.callback_query.message.reply_voice(
+                voice=io.BytesIO(audio_data),
+                caption=f"🔊 {text}"
+            )
+        except:
+            await update.message.reply_voice(
+                voice=io.BytesIO(audio_data),
+                caption=f"🔊 {text}"
+            )
     else:
-        await update.callback_query.message.reply_text(
+        await update.message.reply_text(
             f"⚠️ Не удалось сгенерировать аудио для: {text}"
         )
 
@@ -401,17 +383,14 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     user_info = get_user_data(user_id)
     
-    # Скачиваем голосовое сообщение
     voice = update.message.voice
     file = await context.bot.get_file(voice.file_id)
     
-    # Создаём временный файл
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp_file:
         await file.download_to_drive(tmp_file.name)
         tmp_path = tmp_file.name
     
     try:
-        # Транскрибируем
         transcribed_text = await transcribe_voice(tmp_path)
         
         if not transcribed_text:
@@ -420,36 +399,30 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return user_info.get("mode", CHOOSING) or CHOOSING
         
-        # Показываем что распознали
         await update.message.reply_text(
             f"🎤 Я услышал: *{transcribed_text}*",
             parse_mode='Markdown'
         )
         
-        # Обрабатываем в зависимости от режима
         current_mode = user_info.get("mode")
         
         if current_mode == DIALOG:
-            # В режиме диалога - обрабатываем как текстовое сообщение
-            return await process_dialog_message(update, context, transcribed_text)
+            return await process_dialog_message(update, context, transcribed_text, user_info)
         elif current_mode == TRANSLATE:
-            # В режиме перевода - проверяем ответ
             return await process_translation_answer(update, context, transcribed_text)
         else:
-            # В других режимах - используем AI для анализа
             return await process_general_voice(update, context, transcribed_text)
             
     finally:
-        # Удаляем временный файл
         os.unlink(tmp_path)
 
 
-async def process_dialog_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> int:
+async def process_dialog_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, user_info: dict = None) -> int:
     """Обработка сообщения в режиме диалога"""
     user_id = update.effective_user.id
-    user_info = get_user_data(user_id)
+    if user_info is None:
+        user_info = get_user_data(user_id)
     
-    # Добавляем сообщение в контекст
     user_info["dialog_context"].append({"role": "user", "content": text})
     
     system_prompt = """Ты — дружелюбный учитель украинского языка для русскоговорящего ученика.
@@ -474,7 +447,7 @@ async def process_dialog_message(update: Update, context: ContextTypes.DEFAULT_T
     messages.extend(user_info["dialog_context"][-10:])
     
     try:
-        response = client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=messages,
             max_tokens=500,
@@ -486,11 +459,11 @@ async def process_dialog_message(update: Update, context: ContextTypes.DEFAULT_T
         
         await update.message.reply_text(assistant_message)
         
-        # Генерируем голосовой ответ для украинской части
-        # Извлекаем украинский текст (до скобок)
+        # Генерируем голосовой ответ
         ukrainian_part = assistant_message.split("(")[0].strip() if "(" in assistant_message else assistant_message[:100]
         if ukrainian_part and len(ukrainian_part) > 5:
-            audio_data = await generate_speech(ukrainian_part)
+            voice_id = UKRAINIAN_VOICES.get(user_info.get("voice", DEFAULT_VOICE))
+            audio_data = await generate_speech_elevenlabs(ukrainian_part, voice_id)
             if audio_data:
                 await update.message.reply_voice(
                     voice=io.BytesIO(audio_data),
@@ -506,144 +479,94 @@ async def process_dialog_message(update: Update, context: ContextTypes.DEFAULT_T
     return DIALOG
 
 
-async def process_translation_answer(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> int:
-    """Обработка ответа на упражнение перевода"""
-    user_answer = text.strip().lower()
+async def process_translation_answer(update: Update, context: ContextTypes.DEFAULT_TYPE, user_answer: str) -> int:
+    """Проверить перевод пользователя"""
     user_id = update.effective_user.id
     user_info = get_user_data(user_id)
     
-    exercise = context.user_data.get("current_exercise", {})
-    correct_answer = exercise.get("ukrainian", "").lower()
+    exercise = context.user_data.get("current_exercise")
+    if not exercise:
+        await update.message.reply_text("Упражнение не найдено. Начни заново: /translate")
+        return TRANSLATE
     
     user_info["total_answers"] += 1
     
-    # Проверяем ответ с помощью AI для большей гибкости
+    system_prompt = f"""Ты — учитель украинского языка. Проверь ответ ученика.
+
+Правильный ответ: {exercise['ukrainian']}
+Ответ ученика: {user_answer}
+
+Задача: 
+1. Проверь правильность (допускай небольшие опечатки и вариации)
+2. Если правильно - похвали и объясни на русском почему это правильно
+3. Если неправильно - покажи правильный ответ, объясни ошибку и дай подсказку
+4. Всегда будь дружелюбным и поддерживающим
+
+Ответь на русском языке."""
+    
     try:
-        check_response = client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4.1-mini",
-            messages=[{
-                "role": "system",
-                "content": """Ты проверяешь перевод ученика с русского на украинский.
-                Ответь JSON: {"correct": true/false, "explanation": "краткое объяснение на русском"}
-                Будь гибким: небольшие опечатки или альтернативные формы допустимы."""
-            }, {
-                "role": "user",
-                "content": f"Русский: '{exercise.get('russian', '')}'\nПравильный ответ: '{correct_answer}'\nОтвет ученика: '{user_answer}'"
-            }],
-            max_tokens=150
+            messages=[{"role": "system", "content": system_prompt}],
+            max_tokens=300,
+            temperature=0.7
         )
         
-        result_text = check_response.choices[0].message.content
-        # Пытаемся распарсить JSON
-        try:
-            # Убираем возможные markdown-обёртки
-            result_text = result_text.replace("```json", "").replace("```", "").strip()
-            result = json.loads(result_text)
-            is_correct = result.get("correct", False)
-            explanation = result.get("explanation", "")
-        except:
-            # Если не удалось распарсить, используем простую проверку
-            is_correct = user_answer == correct_answer
-            explanation = ""
-            
-    except Exception as e:
-        logger.error(f"Check error: {e}")
-        is_correct = user_answer == correct_answer
-        explanation = ""
-    
-    if is_correct:
-        user_info["correct_answers"] += 1
-        user_info["streak"] += 1
+        feedback = response.choices[0].message.content
         
-        response = f"""
+        # Проверяем правильность (простая проверка)
+        is_correct = user_answer.lower().strip() == exercise['ukrainian'].lower().strip()
+        
+        if is_correct:
+            user_info["correct_answers"] += 1
+            user_info["streak"] += 1
+            
+            response_text = f"""
 ✅ *Правильно!* Молодец!
 
 🔥 Серия правильных ответов: {user_info["streak"]}
 
-Напиши /translate для следующего упражнения.
-"""
-        # Отправляем голосовое подтверждение
-        audio_data = await generate_speech(exercise.get("ukrainian", ""))
-        if audio_data:
-            await update.message.reply_voice(
-                voice=io.BytesIO(audio_data),
-                caption=f"🔊 {exercise.get('ukrainian', '')}"
-            )
-    else:
-        user_info["streak"] = 0
+{feedback}
+
+Напиши /translate для следующего упражнения."""
+        else:
+            user_info["streak"] = 0
+            response_text = f"""
+❌ Не совсем правильно...
+
+{feedback}
+
+*Правильный ответ:* {exercise['ukrainian']}
+
+Напиши /translate для следующего упражнения."""
         
-        response = f"""
-❌ *Не совсем так*
-
-Твой ответ: {user_answer}
-Правильно: *{exercise.get('ukrainian', '?')}*
-
-💡 {explanation if explanation else 'Попробуй обратить внимание на особенности украинского написания.'}
-
-Напиши /translate для следующего упражнения.
-"""
+        await update.message.reply_text(response_text, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"OpenAI API error: {e}")
+        await update.message.reply_text(
+            "Произошла ошибка при проверке. Попробуй ещё раз!"
+        )
     
-    await update.message.reply_text(response, parse_mode='Markdown')
-    user_info["mode"] = CHOOSING
-    return CHOOSING
+    return TRANSLATE
 
 
 async def process_general_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> int:
-    """Обработка голосового сообщения в общем режиме"""
-    user_id = update.effective_user.id
-    user_info = get_user_data(user_id)
-    
-    # Используем AI для понимания намерения
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{
-                "role": "system",
-                "content": """Ты — помощник для изучения украинского языка.
-                Пользователь отправил голосовое сообщение. Определи его намерение и помоги:
-                - Если это попытка сказать что-то на украинском — оцени произношение и исправь ошибки
-                - Если это вопрос — ответь на него
-                - Если это просьба перевести — переведи
-                - Если непонятно — предложи начать урок или диалог
-                
-                Отвечай дружелюбно, давай примеры на украинском с переводом."""
-            }, {
-                "role": "user",
-                "content": f"Пользователь сказал: '{text}'"
-            }],
-            max_tokens=500,
-            temperature=0.7
-        )
-        
-        answer = response.choices[0].message.content
-        await update.message.reply_text(answer)
-        
-        # Предлагаем действия
-        keyboard = [
-            [InlineKeyboardButton("📚 Начать урок", callback_data="start_lesson")],
-            [InlineKeyboardButton("💬 Диалог с AI", callback_data="start_dialog")],
-            [InlineKeyboardButton("✍️ Перевод", callback_data="start_translate")]
-        ]
-        await update.message.reply_text(
-            "Что хочешь делать дальше?",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        
-    except Exception as e:
-        logger.error(f"AI error: {e}")
-        await update.message.reply_text(
-            "Произошла ошибка. Попробуй написать текстом или используй /start"
-        )
-    
+    """Обработка голосового сообщения в других режимах"""
+    await update.message.reply_text(
+        f"Ты сказал: *{text}*\n\nЭто отличная практика! 🎤",
+        parse_mode='Markdown'
+    )
     return CHOOSING
 
 
-# ============== ОБРАБОТЧИКИ КОМАНД ==============
+# ============== КОМАНДЫ БОТА ==============
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Приветствие и главное меню"""
+    """Начало работы с ботом"""
     user = update.effective_user
-    user_info = get_user_data(user.id)
+    user_id = user.id
+    user_info = get_user_data(user_id)
     user_info["mode"] = CHOOSING
     
     welcome_text = f"""
@@ -656,16 +579,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 *Как это работает:*
 • Ты видишь фразу в контексте
 • Я объясняю особенности на русском
-• Ты практикуешься через диалоги и переводы
-• 🎤 *Можешь отправлять голосовые сообщения!*
+• Слушаешь натуральное произношение 🔊
+• Практикуешься в диалоге и переводе
 
-*Что умею:*
-📚 /lesson — Мини-урок по теме
-💬 /dialog — Диалог с AI на украинском
-✍️ /translate — Упражнения на перевод
-❓ /ask — Задать вопрос об украинском
-📊 /progress — Твой прогресс
-🔊 /voice — Озвучить фразу
+*Что ты можешь делать:*
+📚 Уроки - изучай фразы по темам
+💬 Диалог - общайся со мной на украинском
+✍️ Перевод - переводи фразы с русского
+❓ Вопросы - спрашивай что угодно об украинском
+📊 Прогресс - смотри свою статистику
 
 Выбери действие:
 """
@@ -676,127 +598,124 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         [InlineKeyboardButton("✍️ Перевод", callback_data="start_translate")],
         [InlineKeyboardButton("❓ Задать вопрос", callback_data="ask_question")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
         welcome_text,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
     )
+    
     return CHOOSING
 
 
-async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Команда для озвучивания фразы"""
-    if context.args:
-        text = " ".join(context.args)
-        audio_data = await generate_speech(text)
-        if audio_data:
-            await update.message.reply_voice(
-                voice=io.BytesIO(audio_data),
-                caption=f"🔊 {text}"
-            )
-        else:
-            await update.message.reply_text("Не удалось сгенерировать аудио.")
-    else:
-        await update.message.reply_text(
-            "Использование: /voice <фраза на украинском>\n"
-            "Пример: /voice Привіт, як справи?"
-        )
-
-
 async def show_topics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Показать доступные темы для урока"""
+    """Показать список тем для обучения"""
     user_id = update.effective_user.id
     user_info = get_user_data(user_id)
     user_info["mode"] = LESSON
     
     keyboard = []
-    for topic_id, topic_data in DISCOVERY_LESSONS.items():
-        keyboard.append([InlineKeyboardButton(
-            topic_data["title"], 
-            callback_data=f"topic_{topic_id}"
-        )])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")])
+    for topic_id, topic in DISCOVERY_LESSONS.items():
+        status = "✅" if topic_id in user_info["completed_lessons"] else "⭕"
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{status} {topic['title']}",
+                callback_data=f"topic_{topic_id}"
+            )
+        ])
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu")])
     
     text = """
-📚 *Выбери тему для урока:*
+📚 *Выбери тему для обучения*
 
-Каждая тема содержит полезные фразы с объяснениями.
-Метод Discovery: сначала видишь пример, потом понимаешь правило!
-
-🔊 К каждой фразе есть аудио-произношение!
+✅ = пройдено
+⭕ = новое
 """
     
     if update.callback_query:
         await update.callback_query.edit_message_text(
             text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
         )
     else:
         await update.message.reply_text(
             text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
         )
+    
     return LESSON
 
 
-async def show_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE, topic_id: str, phrase_idx: int) -> None:
-    """Показать фразу из урока"""
+async def show_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE, topic_id: str, phrase_idx: int) -> int:
+    """Показать фразу с объяснением и озвучкой"""
     user_id = update.effective_user.id
     user_info = get_user_data(user_id)
     
     topic = DISCOVERY_LESSONS.get(topic_id)
     if not topic or phrase_idx >= len(topic["phrases"]):
-        # Урок завершён
-        keyboard = [[InlineKeyboardButton("🔙 К темам", callback_data="start_lesson")]]
-        await update.callback_query.edit_message_text(
-            "🎉 *Отлично! Тема пройдена!*\n\nВыбери следующую тему или попрактикуйся в диалоге.",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await update.callback_query.answer("Упражнение завершено!")
         if topic_id not in user_info["completed_lessons"]:
             user_info["completed_lessons"].append(topic_id)
-        return
+        return await show_topics(update, context)
     
     phrase = topic["phrases"][phrase_idx]
+    user_info["current_topic"] = topic_id
+    user_info["phrase_index"] = phrase_idx
     
     text = f"""
-{topic["title"]} — Фраза {phrase_idx + 1}/{len(topic["phrases"])}
+📖 *{topic['title']}*
 
-🇺🇦 *{phrase["ukrainian"]}*
-🇷🇺 {phrase["russian"]}
+🇺🇦 *{phrase['ukrainian']}*
+🇷🇺 {phrase['russian']}
 
-📍 *Контекст:* {phrase["context"]}
+💡 *Discovery:* {phrase['discovery']}
 
-💡 *Discovery:* {phrase["discovery"]}
+📝 *Контекст:* {phrase['context']}
 
-🔊 *Произношение:* `{phrase["audio_hint"]}`
+🔊 *Произношение:* {phrase['audio_hint']}
 """
     
-    keyboard = [
-        [InlineKeyboardButton("🔊 Послушать", callback_data=f"listen_{topic_id}_{phrase_idx}")],
-        [InlineKeyboardButton("➡️ Следующая", callback_data=f"phrase_{topic_id}_{phrase_idx + 1}")],
-        [InlineKeyboardButton("🔙 К темам", callback_data="start_lesson")]
-    ]
+    # Кнопки навигации
+    keyboard = []
+    
+    # Кнопка для озвучки
+    keyboard.append([
+        InlineKeyboardButton("🔊 Послушай", callback_data=f"listen_{topic_id}_{phrase_idx}")
+    ])
+    
+    # Кнопки навигации
+    nav_buttons = []
+    if phrase_idx > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"phrase_{topic_id}_{phrase_idx-1}"))
+    if phrase_idx < len(topic["phrases"]) - 1:
+        nav_buttons.append(InlineKeyboardButton("Далее ➡️", callback_data=f"phrase_{topic_id}_{phrase_idx+1}"))
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    keyboard.append([InlineKeyboardButton("⬅️ К темам", callback_data="start_lesson")])
     
     await update.callback_query.edit_message_text(
         text,
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
     )
+    
+    # Автоматически отправляем голосовое сообщение
+    voice_id = UKRAINIAN_VOICES.get(user_info.get("voice", DEFAULT_VOICE))
+    await send_voice_phrase(update, context, phrase['ukrainian'], voice_id)
+    
+    return LESSON
 
 
 async def start_dialog_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Начать диалог с AI"""
+    """Начать режим диалога"""
     user_id = update.effective_user.id
     user_info = get_user_data(user_id)
-    user_info["dialog_context"] = []
     user_info["mode"] = DIALOG
+    user_info["dialog_context"] = []
     
     text = """
 💬 *Режим диалога*
@@ -821,6 +740,16 @@ _(Напиши /stop чтобы выйти из диалога)_
     else:
         await update.message.reply_text(text, parse_mode='Markdown')
     
+    # Отправляем приветствие голосом
+    voice_id = UKRAINIAN_VOICES.get(user_info.get("voice", DEFAULT_VOICE))
+    greeting = "Привіт! Як справи? Давай спілкуватися по-українськи!"
+    audio_data = await generate_speech_elevenlabs(greeting, voice_id)
+    if audio_data:
+        await update.message.reply_voice(
+            voice=io.BytesIO(audio_data),
+            caption="🔊 Послушай приветствие"
+        )
+    
     return DIALOG
 
 
@@ -837,7 +766,7 @@ async def handle_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         )
         return CHOOSING
     
-    return await process_dialog_message(update, context, user_message)
+    return await process_dialog_message(update, context, user_message, user_info)
 
 
 async def start_translate_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -846,7 +775,6 @@ async def start_translate_mode(update: Update, context: ContextTypes.DEFAULT_TYP
     user_info = get_user_data(user_id)
     user_info["mode"] = TRANSLATE
     
-    # Выбираем случайное упражнение
     exercise = random.choice(TRANSLATION_EXERCISES)
     context.user_data["current_exercise"] = exercise
     
@@ -868,6 +796,16 @@ _(Напиши свой перевод или /skip чтобы пропусти�
         await update.callback_query.edit_message_text(text, parse_mode='Markdown')
     else:
         await update.message.reply_text(text, parse_mode='Markdown')
+    
+    # Отправляем вопрос голосом
+    voice_id = UKRAINIAN_VOICES.get(user_info.get("voice", DEFAULT_VOICE))
+    question = f"Переклади на українську: {exercise['russian']}"
+    audio_data = await generate_speech_elevenlabs(question, voice_id)
+    if audio_data:
+        await update.message.reply_voice(
+            voice=io.BytesIO(audio_data),
+            caption="🔊 Послушай вопрос"
+        )
     
     return TRANSLATE
 
@@ -905,6 +843,16 @@ _(Напиши /stop чтобы вернуться в меню)_
     else:
         await update.message.reply_text(text, parse_mode='Markdown')
     
+    # Отправляем приглашение голосом
+    voice_id = UKRAINIAN_VOICES.get(user_info.get("voice", DEFAULT_VOICE))
+    invitation = "Яке у тебе питання про українську мову?"
+    audio_data = await generate_speech_elevenlabs(invitation, voice_id)
+    if audio_data:
+        await update.message.reply_voice(
+            voice=io.BytesIO(audio_data),
+            caption="🔊 Послушай вопрос"
+        )
+    
     return QUESTION
 
 
@@ -933,7 +881,7 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 7. Если спрашивают как произносится — объясни подробно"""
     
     try:
-        response = client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -1044,7 +992,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return LESSON
     
     elif data.startswith("listen_"):
-        # Озвучивание фразы
         parts = data.split("_")
         topic_id = parts[1]
         phrase_idx = int(parts[2])
@@ -1052,7 +999,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         topic = DISCOVERY_LESSONS.get(topic_id)
         if topic and phrase_idx < len(topic["phrases"]):
             phrase = topic["phrases"][phrase_idx]
-            await send_voice_phrase(update, context, phrase["ukrainian"])
+            voice_id = UKRAINIAN_VOICES.get(user_info.get("voice", DEFAULT_VOICE))
+            await send_voice_phrase(update, context, phrase["ukrainian"], voice_id)
         return LESSON
     
     return CHOOSING
@@ -1074,7 +1022,6 @@ def main() -> None:
     """Запуск бота"""
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # Conversation handler для управления состояниями
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -1112,9 +1059,7 @@ def main() -> None:
     
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("progress", show_progress))
-    application.add_handler(CommandHandler("voice", voice_command))
     
-    # Запуск бота
     logger.info("Бот запущен!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
